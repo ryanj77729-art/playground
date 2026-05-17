@@ -27,6 +27,8 @@ import {
 } from "./state";
 import {Example2D, shuffle} from "./dataset";
 import {AppendingLineChart} from "./linechart";
+import {VisionBlindSpot} from "./vision-blindspot";
+import {applyGradientBlindSpotMask, BlindSpotDatasetConfig} from "./blindspot-dataset";
 import * as d3 from 'd3';
 
 let mainWidth;
@@ -174,6 +176,17 @@ let lossTest = 0;
 let player = new Player();
 let lineChart = new AppendingLineChart(d3.select("#linechart"),
     ["#777", "black"]);
+
+// Vision blind spot variables
+let blindSpot: VisionBlindSpot = new VisionBlindSpot({
+  centerX: 1.5,
+  centerY: 0,
+  radius: 0.4,
+  showBlindSpot: false,
+  fillMethod: 'predict'
+});
+
+let blindSpotEnabled = false;
 
 function makeGUI() {
   d3.select("#reset-button").on("click", () => {
@@ -392,6 +405,75 @@ function makeGUI() {
     d3.select("div.more").style("display", "none");
     d3.select("header").style("display", "none");
   }
+
+  // Setup blind spot controls
+  setupBlindSpotControls();
+}
+
+function setupBlindSpotControls() {
+  // Enable/disable blind spot
+  d3.select("#enable-blindspot").on("change", function() {
+    blindSpotEnabled = this.checked;
+    blindSpot.updateConfig({ showBlindSpot: blindSpotEnabled });
+    generateData();
+    parametersChanged = true;
+    reset();
+  });
+  d3.select("#enable-blindspot").property("checked", blindSpotEnabled);
+
+  // Blind spot size slider
+  let blindSpotSizeSlider = d3.select("#blindSpotSize").on("input", function() {
+    let size = +this.value;
+    d3.select("label[for='blindSpotSize'] .value").text(size.toFixed(2));
+    blindSpot.updateConfig({ radius: size });
+    if (blindSpotEnabled) {
+      generateData();
+      parametersChanged = true;
+      reset();
+    }
+  });
+  blindSpotSizeSlider.property("value", blindSpot.getConfig().radius);
+  d3.select("label[for='blindSpotSize'] .value").text(blindSpot.getConfig().radius.toFixed(2));
+
+  // Blind spot X position slider
+  let blindSpotXSlider = d3.select("#blindSpotX").on("input", function() {
+    let x = +this.value;
+    d3.select("label[for='blindSpotX'] .value").text(x.toFixed(2));
+    blindSpot.updateConfig({ centerX: x });
+    if (blindSpotEnabled) {
+      generateData();
+      parametersChanged = true;
+      reset();
+    }
+  });
+  blindSpotXSlider.property("value", blindSpot.getConfig().centerX);
+  d3.select("label[for='blindSpotX'] .value").text(blindSpot.getConfig().centerX.toFixed(2));
+
+  // Blind spot Y position slider
+  let blindSpotYSlider = d3.select("#blindSpotY").on("input", function() {
+    let y = +this.value;
+    d3.select("label[for='blindSpotY'] .value").text(y.toFixed(2));
+    blindSpot.updateConfig({ centerY: y });
+    if (blindSpotEnabled) {
+      generateData();
+      parametersChanged = true;
+      reset();
+    }
+  });
+  blindSpotYSlider.property("value", blindSpot.getConfig().centerY);
+  d3.select("label[for='blindSpotY'] .value").text(blindSpot.getConfig().centerY.toFixed(2));
+
+  // Blind spot fill method dropdown
+  d3.select("#blindSpotFill").on("change", function() {
+    let method = this.value as 'predict' | 'average' | 'context';
+    blindSpot.updateConfig({ fillMethod: method });
+    if (blindSpotEnabled) {
+      generateData();
+      parametersChanged = true;
+      reset();
+    }
+  });
+  d3.select("#blindSpotFill").property("value", blindSpot.getConfig().fillMethod);
 }
 
 function updateBiasesUI(network: nn.Node[][]) {
@@ -1077,6 +1159,15 @@ function generateData(firstTime = false) {
   let generator = state.problem === Problem.CLASSIFICATION ?
       state.dataset : state.regDataset;
   let data = generator(numSamples, state.noise / 100);
+  
+  // Apply blind spot masking if enabled
+  if (blindSpotEnabled) {
+    data = applyGradientBlindSpotMask({
+      blindSpot: blindSpot,
+      baseDatasetGenerator: generator
+    }, numSamples, state.noise / 100);
+  }
+  
   // Shuffle the data in-place.
   shuffle(data);
   // Split into train and test data.
