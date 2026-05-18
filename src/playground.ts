@@ -190,6 +190,10 @@ let blindSpot: VisionBlindSpot = new VisionBlindSpot({
 let blindSpotEnabled = false;
 
 function setupBlindSpotControls() {
+  // Initialize MDL components - FIX FOR OVERLAPPING TEXT
+  if (typeof (window as any).componentHandler !== 'undefined') {
+    (window as any).componentHandler.upgradeDom();
+  }
   // Enable/disable blind spot
   d3.select("#enable-blindspot").on("change", function() {
     blindSpotEnabled = (this as HTMLInputElement).checked;
