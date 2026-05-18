@@ -10,7 +10,7 @@ Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
-limitations under the License.
+Limitations under the License.
 ==============================================================================*/
 
 /**
@@ -27,37 +27,23 @@ import {VisionBlindSpot} from "./vision-blindspot";
  * Configuration for blind spot dataset generation
  */
 export interface BlindSpotDatasetConfig {
+  /** The blind spot instance to apply masking with */
   blindSpot: VisionBlindSpot;
+  /** Base dataset generator function */
   baseDatasetGenerator: (numSamples: number, noiseLevel: number) => Example2D[];
 }
 
 /**
- * Apply blind spot masking to a dataset
- * Returns a dataset where points in the blind spot region have their labels masked
+ * Applies a gradient mask to blind spot with blending strategy.
+ * Returns a dataset where:
+ * - Points outside blind spot: original labels
+ * - Points inside blind spot: gradually masked from edges to center
+ * - 40% of masked data is included for learning
+ * 
+ * This strategy allows the network to learn patterns from surrounding context
+ * while still having some examples of masked data to understand what's missing.
  */
-export function applyBlindSpotToDataset(
-  config: BlindSpotDatasetConfig,
-  numSamples: number,
-  noiseLevel: number
-): Example2D[] {
-  // Generate base dataset
-  const baseData = config.baseDatasetGenerator(numSamples, noiseLevel);
-  
-  // Apply blind spot masking
-  return baseData.map(point => ({
-    x: point.x,
-    y: point.y,
-    label: config.blindSpot.isInBlindSpot(point.x, point.y) 
-      ? 0  // Masked: neutral value
-      : point.label
-  }));
-}
-
-/**
- * Create a dataset with blind spot where network must learn to predict missing regions
- * The blind spot is visible but data is masked - network learns context from surroundings
- */
-export function createContextLearningDataset(
+export function applyGradientBlindSpotMask(
   config: BlindSpotDatasetConfig,
   numSamples: number,
   noiseLevel: number
@@ -65,88 +51,59 @@ export function createContextLearningDataset(
   const baseData = config.baseDatasetGenerator(numSamples, noiseLevel);
   
   return baseData.map(point => {
-    const mask = config.blindSpot.getBlindSpotMask(point.x, point.y);
+    const maskStrength = config.blindSpot.getBlindSpotMask(point.x, point.y);
     
-    // Smoothly mask the label based on distance from blind spot center
+    // Apply gradient masking: strong masking at center, weak at edges
+    // This creates a smooth transition zone
     return {
       x: point.x,
       y: point.y,
-      label: point.label * (1 - mask)
+      label: point.label * (1 - maskStrength)
     };
   });
 }
 
 /**
- * Create a predictive dataset where the network learns to infer the blind spot content
- * Points are included in training with masked labels; network learns patterns
+ * Blend original and masked datasets for better training.
+ * Creates a mix of fully visible and masked data, helping the network
+ * learn both the original patterns and how to predict masked regions.
+ * 
+ * @param originalData - Original unmasked dataset
+ * @param maskedData - Gradient-masked dataset
+ * @param maskRatio - Ratio of masked data (0-1). Default 0.4 means 40% masked, 60% original
+ * @returns Combined dataset with blend of both
  */
-export function createPredictiveDataset(
-  config: BlindSpotDatasetConfig,
-  numSamples: number,
-  noiseLevel: number
+export function blendDatasets(
+  originalData: Example2D[],
+  maskedData: Example2D[],
+  maskRatio: number = 0.4
 ): Example2D[] {
-  const baseData = config.baseDatasetGenerator(numSamples, noiseLevel);
+  if (maskRatio < 0 || maskRatio > 1) {
+    throw new Error('maskRatio must be between 0 and 1');
+  }
   
-  return baseData.map(point => {
-    if (config.blindSpot.isInBlindSpot(point.x, point.y)) {
-      // For blind spot region, predict based on surrounding context
-      const predictedLabel = config.blindSpot.predictBlindSpotValue(
-        point.x,
-        point.y,
-        (x, y) => {
-          // Find closest point in base data and return its label
-          let closest = baseData[0];
-          let minDist = Infinity;
-          
-          for (const p of baseData) {
-            const dist = Math.sqrt((p.x - x) ** 2 + (p.y - y) ** 2);
-            if (dist < minDist) {
-              minDist = dist;
-              closest = p;
-            }
-          }
-          
-          return closest.label;
-        }
-      );
-      
-      return {
-        x: point.x,
-        y: point.y,
-        label: predictedLabel
-      };
-    }
-    
-    return point;
-  });
-}
+  if (originalData.length !== maskedData.length) {
+    throw new Error('Original and masked datasets must have the same length');
+  }
 
-/**
- * Create a masked visualization dataset for display
- * Shows where the blind spot is while indicating masked regions
- */
-export function createVisualizationDataset(
-  config: BlindSpotDatasetConfig,
-  numSamples: number,
-  noiseLevel: number
-): Example2D[] {
-  const baseData = config.baseDatasetGenerator(numSamples, noiseLevel);
+  const numMasked = Math.floor(originalData.length * maskRatio);
+  const result: Example2D[] = [];
   
-  return baseData.map(point => {
-    // Mark points in blind spot with a neutral value for visualization
-    if (config.blindSpot.isInBlindSpot(point.x, point.y)) {
-      return {
-        x: point.x,
-        y: point.y,
-        label: 0  // Neutral value in visualization
-      };
-    }
-    return point;
-  });
+  // Add original data first
+  result.push(...originalData.slice(0, originalData.length - numMasked));
+  
+  // Add masked data
+  result.push(...maskedData.slice(maskedData.length - numMasked));
+  
+  return result;
 }
 
 /**
  * Generate statistics about how the blind spot affects the dataset
+ * 
+ * @param config - Blind spot configuration
+ * @param dataset - Dataset to analyze
+ * @returns Statistics object with masking information
  */
 export function getBlindSpotDatasetStats(
   config: BlindSpotDatasetConfig,
@@ -158,6 +115,10 @@ export function getBlindSpotDatasetStats(
   avgLabelMagnitudeUnmasked: number;
   avgLabelMagnitudeMasked: number;
 } {
+  if (!dataset || dataset.length === 0) {
+    throw new Error('Dataset must not be empty');
+  }
+
   let maskedCount = 0;
   let unmaskedCount = 0;
   let maskedLabelSum = 0;
@@ -180,26 +141,4 @@ export function getBlindSpotDatasetStats(
     avgLabelMagnitudeUnmasked: unmaskedCount > 0 ? unmaskedLabelSum / unmaskedCount : 0,
     avgLabelMagnitudeMasked: maskedCount > 0 ? maskedLabelSum / maskedCount : 0
   };
-}
-
-/**
- * Apply a gradient mask to blind spot (harder masking at center, softer at edges)
- */
-export function applyGradientBlindSpotMask(
-  config: BlindSpotDatasetConfig,
-  numSamples: number,
-  noiseLevel: number
-): Example2D[] {
-  const baseData = config.baseDatasetGenerator(numSamples, noiseLevel);
-  
-  return baseData.map(point => {
-    const maskStrength = config.blindSpot.getBlindSpotMask(point.x, point.y);
-    
-    // Apply gradient masking: strong masking at center, weak at edges
-    return {
-      x: point.x,
-      y: point.y,
-      label: point.label * (1 - maskStrength)
-    };
-  });
 }
