@@ -10,7 +10,7 @@ Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
-limitations under the License.
+Limitations under the License.
 ==============================================================================*/
 
 /**
@@ -26,12 +26,20 @@ limitations under the License.
  * 3. Heatmaps showing neural activation patterns for prediction
  */
 
+/**
+ * Configuration options for blind spot behavior and visualization
+ */
 export interface BlindSpotConfig {
-  centerX: number;        // Center of blind spot (-6 to 6)
-  centerY: number;        // Center of blind spot (-6 to 6)
-  radius: number;         // Radius of blind spot (0.2 to 1.5)
-  showBlindSpot: boolean; // Whether to visualize the blind spot
-  fillMethod: 'predict' | 'average' | 'context'; // How to handle missing data
+  /** X coordinate of blind spot center (-6 to 6) */
+  centerX: number;
+  /** Y coordinate of blind spot center (-6 to 6) */
+  centerY: number;
+  /** Radius of blind spot region (0.2 to 1.5) */
+  radius: number;
+  /** Whether to visualize the blind spot overlay */
+  showBlindSpot: boolean;
+  /** Method for handling missing data: 'predict', 'average', or 'context' */
+  fillMethod: 'predict' | 'average' | 'context';
 }
 
 export class VisionBlindSpot {

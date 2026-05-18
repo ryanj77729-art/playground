@@ -10,7 +10,7 @@ Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
-limitations under the License.
+Limitations under the License.
 ==============================================================================*/
 
 import * as nn from "./nn";
@@ -28,10 +28,10 @@ import {
 import {Example2D, shuffle} from "./dataset";
 import {AppendingLineChart} from "./linechart";
 import {VisionBlindSpot} from "./vision-blindspot";
-import {applyGradientBlindSpotMask, BlindSpotDatasetConfig} from "./blindspot-dataset";
+import {applyGradientBlindSpotMask, blendDatasets, BlindSpotDatasetConfig} from "./blindspot-dataset";
 import * as d3 from 'd3';
 
-let mainWidth;
+let mainWidth: number | undefined;
 
 // More scrolling
 d3.select(".more button").on("click", function() {
@@ -41,11 +41,11 @@ d3.select(".more button").on("click", function() {
     .tween("scroll", scrollTween(position));
 });
 
-function scrollTween(offset) {
+function scrollTween(offset: number) {
   return function() {
     let i = d3.interpolateNumber(window.pageYOffset ||
         document.documentElement.scrollTop, offset);
-    return function(t) { scrollTo(0, i(t)); };
+    return function(t: number) { scrollTo(0, i(t)); };
   };
 }
 
@@ -54,6 +54,7 @@ const BIAS_SIZE = 5;
 const NUM_SAMPLES_CLASSIFY = 500;
 const NUM_SAMPLES_REGRESS = 1200;
 const DENSITY = 100;
+const BLIND_SPOT_MASK_RATIO = 0.4; // 40% masked, 60% original data
 
 enum HoverType {
   BIAS, WEIGHT
@@ -74,7 +75,7 @@ let INPUTS: {[name: string]: InputFeature} = {
   "sinY": {f: (x, y) => Math.sin(y), label: "sin(X_2)"},
 };
 
-let HIDABLE_CONTROLS = [
+let HIDABLE_CONTROLS: Array<[string, string]> = [
   ["Show test data", "showTestData"],
   ["Discretize output", "discretize"],
   ["Play button", "playButton"],
@@ -95,7 +96,7 @@ let HIDABLE_CONTROLS = [
 class Player {
   private timerIndex = 0;
   private isPlaying = false;
-  private callback: (isPlaying: boolean) => void = null;
+  private callback: ((isPlaying: boolean) => void) | null = null;
 
   /** Plays/pauses the player. */
   playOrPause() {
@@ -153,7 +154,7 @@ state.getHiddenProps().forEach(prop => {
 });
 
 let boundary: {[id: string]: number[][]} = {};
-let selectedNodeId: string = null;
+let selectedNodeId: string | null = null;
 // Plot the heatmap.
 let xDomain: [number, number] = [-6, 6];
 let heatMap =
@@ -170,7 +171,7 @@ let colorScale = d3.scale.linear<string, number>()
 let iter = 0;
 let trainData: Example2D[] = [];
 let testData: Example2D[] = [];
-let network: nn.Node[][] = null;
+let network: nn.Node[][] | null = null;
 let lossTrain = 0;
 let lossTest = 0;
 let player = new Player();
@@ -191,7 +192,7 @@ let blindSpotEnabled = false;
 function setupBlindSpotControls() {
   // Enable/disable blind spot
   d3.select("#enable-blindspot").on("change", function() {
-    blindSpotEnabled = this.checked;
+    blindSpotEnabled = (this as HTMLInputElement).checked;
     blindSpot.updateConfig({ showBlindSpot: blindSpotEnabled });
     generateData();
     parametersChanged = true;
@@ -201,7 +202,7 @@ function setupBlindSpotControls() {
 
   // Blind spot size slider
   let blindSpotSizeSlider = d3.select("#blindSpotSize").on("input", function() {
-    let size = +this.value;
+    let size = +(this as HTMLInputElement).value;
     d3.select("label[for='blindSpotSize'] .value").text(size.toFixed(2));
     blindSpot.updateConfig({ radius: size });
     if (blindSpotEnabled) {
@@ -215,7 +216,7 @@ function setupBlindSpotControls() {
 
   // Blind spot X position slider
   let blindSpotXSlider = d3.select("#blindSpotX").on("input", function() {
-    let x = +this.value;
+    let x = +(this as HTMLInputElement).value;
     d3.select("label[for='blindSpotX'] .value").text(x.toFixed(2));
     blindSpot.updateConfig({ centerX: x });
     if (blindSpotEnabled) {
@@ -229,7 +230,7 @@ function setupBlindSpotControls() {
 
   // Blind spot Y position slider
   let blindSpotYSlider = d3.select("#blindSpotY").on("input", function() {
-    let y = +this.value;
+    let y = +(this as HTMLInputElement).value;
     d3.select("label[for='blindSpotY'] .value").text(y.toFixed(2));
     blindSpot.updateConfig({ centerY: y });
     if (blindSpotEnabled) {
@@ -243,7 +244,7 @@ function setupBlindSpotControls() {
 
   // Blind spot fill method dropdown
   d3.select("#blindSpotFill").on("change", function() {
-    let method = this.value as 'predict' | 'average' | 'context';
+    let method = (this as HTMLSelectElement).value as 'predict' | 'average' | 'context';
     blindSpot.updateConfig({ fillMethod: method });
     if (blindSpotEnabled) {
       generateData();
@@ -286,7 +287,7 @@ function makeGUI() {
 
   let dataThumbnails = d3.selectAll("canvas[data-dataset]");
   dataThumbnails.on("click", function() {
-    let newDataset = datasets[this.dataset.dataset];
+    let newDataset = datasets[(this as any).dataset.dataset];
     if (newDataset === state.dataset) {
       return;
     }
@@ -304,7 +305,7 @@ function makeGUI() {
 
   let regDataThumbnails = d3.selectAll("canvas[data-regDataset]");
   regDataThumbnails.on("click", function() {
-    let newDataset = regDatasets[this.dataset.regdataset];
+    let newDataset = regDatasets[(this as any).dataset.regdataset];
     if (newDataset === state.regDataset) {
       return;
     }
@@ -341,7 +342,7 @@ function makeGUI() {
   });
 
   let showTestData = d3.select("#show-test-data").on("change", function() {
-    state.showTestData = this.checked;
+    state.showTestData = (this as HTMLInputElement).checked;
     state.serialize();
     userHasInteracted();
     heatMap.updateTestPoints(state.showTestData ? testData : []);
@@ -349,7 +350,7 @@ function makeGUI() {
   showTestData.property("checked", state.showTestData);
 
   let discretize = d3.select("#discretize").on("change", function() {
-    state.discretize = this.checked;
+    state.discretize = (this as HTMLInputElement).checked;
     state.serialize();
     userHasInteracted();
     updateUI();
@@ -357,8 +358,8 @@ function makeGUI() {
   discretize.property("checked", state.discretize);
 
   let percTrain = d3.select("#percTrainData").on("input", function() {
-    state.percTrainData = this.value;
-    d3.select("label[for='percTrainData'] .value").text(this.value);
+    state.percTrainData = (this as HTMLInputElement).value;
+    d3.select("label[for='percTrainData'] .value").text((this as HTMLInputElement).value);
     generateData();
     parametersChanged = true;
     reset();
@@ -367,8 +368,8 @@ function makeGUI() {
   d3.select("label[for='percTrainData'] .value").text(state.percTrainData);
 
   let noise = d3.select("#noise").on("input", function() {
-    state.noise = this.value;
-    d3.select("label[for='noise'] .value").text(this.value);
+    state.noise = (this as HTMLInputElement).value;
+    d3.select("label[for='noise'] .value").text((this as HTMLInputElement).value);
     generateData();
     parametersChanged = true;
     reset();
@@ -387,8 +388,8 @@ function makeGUI() {
   d3.select("label[for='noise'] .value").text(state.noise);
 
   let batchSize = d3.select("#batchSize").on("input", function() {
-    state.batchSize = this.value;
-    d3.select("label[for='batchSize'] .value").text(this.value);
+    state.batchSize = (this as HTMLInputElement).value;
+    d3.select("label[for='batchSize'] .value").text((this as HTMLInputElement).value);
     parametersChanged = true;
     reset();
   });
@@ -396,7 +397,7 @@ function makeGUI() {
   d3.select("label[for='batchSize'] .value").text(state.batchSize);
 
   let activationDropdown = d3.select("#activations").on("change", function() {
-    state.activation = activations[this.value];
+    state.activation = activations[(this as HTMLSelectElement).value];
     parametersChanged = true;
     reset();
   });
@@ -404,7 +405,7 @@ function makeGUI() {
       getKeyFromValue(activations, state.activation));
 
   let learningRate = d3.select("#learningRate").on("change", function() {
-    state.learningRate = +this.value;
+    state.learningRate = +(this as HTMLSelectElement).value;
     state.serialize();
     userHasInteracted();
     parametersChanged = true;
@@ -413,7 +414,7 @@ function makeGUI() {
 
   let regularDropdown = d3.select("#regularizations").on("change",
       function() {
-    state.regularization = regularizations[this.value];
+    state.regularization = regularizations[(this as HTMLSelectElement).value];
     parametersChanged = true;
     reset();
   });
@@ -421,14 +422,14 @@ function makeGUI() {
       getKeyFromValue(regularizations, state.regularization));
 
   let regularRate = d3.select("#regularRate").on("change", function() {
-    state.regularizationRate = +this.value;
+    state.regularizationRate = +(this as HTMLSelectElement).value;
     parametersChanged = true;
     reset();
   });
   regularRate.property("value", state.regularizationRate);
 
   let problem = d3.select("#problem").on("change", function() {
-    state.problem = problems[this.value];
+    state.problem = problems[(this as HTMLSelectElement).value];
     generateData();
     drawDatasetThumbnails();
     parametersChanged = true;
@@ -449,8 +450,8 @@ function makeGUI() {
 
   window.addEventListener("resize", () => {
     let newWidth = document.querySelector("#main-part")
-        .getBoundingClientRect().width;
-    if (newWidth !== mainWidth) {
+        ?.getBoundingClientRect().width;
+    if (newWidth != null && newWidth !== mainWidth) {
       mainWidth = newWidth;
       drawNetwork(network);
       updateUI(true);
@@ -467,13 +468,13 @@ function makeGUI() {
   setupBlindSpotControls();
 }
 
-function updateBiasesUI(network: nn.Node[][]) {
+function updateBiasesUI(network: nn.Node[][]): void {
   nn.forEachNode(network, true, node => {
     d3.select(`rect#bias-${node.id}`).style("fill", colorScale(node.bias));
   });
 }
 
-function updateWeightsUI(network: nn.Node[][], container) {
+function updateWeightsUI(network: nn.Node[][], container: any): void {
   for (let layerIdx = 1; layerIdx < network.length; layerIdx++) {
     let currentLayer = network[layerIdx];
     for (let i = 0; i < currentLayer.length; i++) {
@@ -493,7 +494,7 @@ function updateWeightsUI(network: nn.Node[][], container) {
 }
 
 function drawNode(cx: number, cy: number, nodeId: string, isInput: boolean,
-    container, node?: nn.Node) {
+    container: any, node?: nn.Node): void {
   let x = cx - RECT_SIZE / 2;
   let y = cy - RECT_SIZE / 2;
 
@@ -523,7 +524,7 @@ function drawNode(cx: number, cy: number, nodeId: string, isInput: boolean,
     if (/[_^]/.test(label)) {
       let myRe = /(.*?)([_^])(.)/g;
       let myArray;
-      let lastIndex;
+      let lastIndex = 0;
       while ((myArray = myRe.exec(label)) != null) {
         lastIndex = myRe.lastIndex;
         let prefix = myArray[1];
@@ -574,15 +575,15 @@ function drawNode(cx: number, cy: number, nodeId: string, isInput: boolean,
       selectedNodeId = nodeId;
       div.classed("hovered", true);
       nodeGroup.classed("hovered", true);
-      updateDecisionBoundary(network, false);
+      updateDecisionBoundary(network as nn.Node[][], false);
       heatMap.updateBackground(boundary[nodeId], state.discretize);
     })
     .on("mouseleave", function() {
       selectedNodeId = null;
       div.classed("hovered", false);
       nodeGroup.classed("hovered", false);
-      updateDecisionBoundary(network, false);
-      heatMap.updateBackground(boundary[nn.getOutputNode(network).id],
+      updateDecisionBoundary(network as nn.Node[][], false);
+      heatMap.updateBackground(boundary[nn.getOutputNode(network as nn.Node[][]).id],
           state.discretize);
     });
   if (isInput) {
@@ -599,18 +600,22 @@ function drawNode(cx: number, cy: number, nodeId: string, isInput: boolean,
   let nodeHeatMap = new HeatMap(RECT_SIZE, DENSITY / 10, xDomain,
       xDomain, div, {noSvg: true});
   div.datum({heatmap: nodeHeatMap, id: nodeId});
-
 }
 
-function drawNetwork(network: nn.Node[][]): void {
+function drawNetwork(network: nn.Node[][] | null): void {
+  if (!network) return;
+  
   let svg = d3.select("#svg");
   svg.select("g.core").remove();
   d3.select("#network").selectAll("div.canvas").remove();
   d3.select("#network").selectAll("div.plus-minus-neurons").remove();
 
   let padding = 3;
-  let co = d3.select(".column.output").node() as HTMLDivElement;
-  let cf = d3.select(".column.features").node() as HTMLDivElement;
+  let co = d3.select(".column.output").node() as HTMLDivElement | null;
+  let cf = d3.select(".column.features").node() as HTMLDivElement | null;
+  
+  if (!co || !cf) return;
+  
   let width = co.offsetLeft - cf.offsetLeft;
   svg.attr("width", width);
 
@@ -651,11 +656,11 @@ function drawNetwork(network: nn.Node[][]): void {
       node2coord[node.id] = {cx, cy};
       drawNode(cx, cy, node.id, false, container, node);
 
-      let numNodes = network[layerIdx].length;
+      let numNodesInLayer = network[layerIdx].length;
       let nextNumNodes = network[layerIdx + 1].length;
       if (idWithCallout == null &&
-          i === numNodes - 1 &&
-          nextNumNodes <= numNodes) {
+          i === numNodesInLayer - 1 &&
+          nextNumNodes <= numNodesInLayer) {
         calloutThumb.style({
           display: null,
           top: `${20 + 3 + cy}px`,
@@ -671,11 +676,11 @@ function drawNetwork(network: nn.Node[][]): void {
         let prevLayer = network[layerIdx - 1];
         let lastNodePrevLayer = prevLayer[prevLayer.length - 1];
         if (targetIdWithCallout == null &&
-            i === numNodes - 1 &&
+            i === numNodesInLayer - 1 &&
             link.source.id === lastNodePrevLayer.id &&
             (link.source.id !== idWithCallout || numLayers <= 5) &&
             link.dest.id !== idWithCallout &&
-            prevLayer.length >= numNodes) {
+            prevLayer.length >= numNodesInLayer) {
           let midPoint = path.getPointAtLength(path.getTotalLength() * 0.7);
           calloutWeights.style({
             display: null,
@@ -707,12 +712,12 @@ function drawNetwork(network: nn.Node[][]): void {
   d3.select(".column.features").style("height", height + "px");
 }
 
-function getRelativeHeight(selection) {
+function getRelativeHeight(selection: any): number {
   let node = selection.node() as HTMLAnchorElement;
   return node.offsetHeight + node.offsetTop;
 }
 
-function addPlusMinusControl(x: number, layerIdx: number) {
+function addPlusMinusControl(x: number, layerIdx: number): void {
   let div = d3.select("#network").append("div")
     .classed("plus-minus-neurons", true)
     .style("left", `${x - 10}px`);
@@ -755,8 +760,8 @@ function addPlusMinusControl(x: number, layerIdx: number) {
   );
 }
 
-function updateHoverCard(type: HoverType, nodeOrLink?: nn.Node | nn.Link,
-    coordinates?: [number, number]) {
+function updateHoverCard(type: HoverType | null, nodeOrLink?: nn.Node | nn.Link,
+    coordinates?: [number, number]): void {
   let hovercard = d3.select("#hovercard");
   if (type == null) {
     hovercard.style("display", "none");
@@ -768,11 +773,11 @@ function updateHoverCard(type: HoverType, nodeOrLink?: nn.Node | nn.Link,
     let input = hovercard.select("input");
     input.style("display", null);
     input.on("input", function() {
-      if (this.value != null && this.value !== "") {
+      if ((this as HTMLInputElement).value != null && (this as HTMLInputElement).value !== "") {
         if (type === HoverType.WEIGHT) {
-          (nodeOrLink as nn.Link).weight = +this.value;
+          (nodeOrLink as nn.Link).weight = +(this as HTMLInputElement).value;
         } else {
-          (nodeOrLink as nn.Node).bias = +this.value;
+          (nodeOrLink as nn.Node).bias = +(this as HTMLInputElement).value;
         }
         updateUI();
       }
@@ -789,8 +794,8 @@ function updateHoverCard(type: HoverType, nodeOrLink?: nn.Node | nn.Link,
     (nodeOrLink as nn.Node).bias;
   let name = (type === HoverType.WEIGHT) ? "Weight" : "Bias";
   hovercard.style({
-    "left": `${coordinates[0] + 20}px`,
-    "top": `${coordinates[1]}px`,
+    "left": `${coordinates![0] + 20}px`,
+    "top": `${coordinates![1]}px`,
     "display": "block"
   });
   hovercard.select(".type").text(name);
@@ -804,8 +809,8 @@ function updateHoverCard(type: HoverType, nodeOrLink?: nn.Node | nn.Link,
 
 function drawLink(
     input: nn.Link, node2coord: {[id: string]: {cx: number, cy: number}},
-    network: nn.Node[][], container,
-    isFirst: boolean, index: number, length: number) {
+    network: nn.Node[][], container: any,
+    isFirst: boolean, index: number, length: number): any {
   let line = container.insert("path", ":first-child");
   let source = node2coord[input.source.id];
   let dest = node2coord[input.dest.id];
@@ -838,7 +843,7 @@ function drawLink(
   return line;
 }
 
-function updateDecisionBoundary(network: nn.Node[][], firstTime: boolean) {
+function updateDecisionBoundary(network: nn.Node[][], firstTime: boolean): void {
   if (firstTime) {
     boundary = {};
     nn.forEachNode(network, true, node => {
@@ -889,7 +894,9 @@ function getLoss(network: nn.Node[][], dataPoints: Example2D[]): number {
   return loss / dataPoints.length;
 }
 
-function updateUI(firstStep = false) {
+function updateUI(firstStep = false): void {
+  if (!network) return;
+  
   updateWeightsUI(network, d3.select("g.core"));
   updateBiasesUI(network);
   updateDecisionBoundary(network, firstStep);
@@ -946,14 +953,14 @@ function oneStep(): void {
   iter++;
   trainData.forEach((point, i) => {
     let input = constructInput(point.x, point.y);
-    nn.forwardProp(network, input);
-    nn.backProp(network, point.label, nn.Errors.SQUARE);
+    nn.forwardProp(network as nn.Node[][], input);
+    nn.backProp(network as nn.Node[][], point.label, nn.Errors.SQUARE);
     if ((i + 1) % state.batchSize === 0) {
-      nn.updateWeights(network, state.learningRate, state.regularizationRate);
+      nn.updateWeights(network as nn.Node[][], state.learningRate, state.regularizationRate);
     }
   });
-  lossTrain = getLoss(network, trainData);
-  lossTest = getLoss(network, testData);
+  lossTrain = getLoss(network as nn.Node[][], trainData);
+  lossTest = getLoss(network as nn.Node[][], testData);
   updateUI();
 }
 
@@ -972,7 +979,7 @@ export function getOutputWeights(network: nn.Node[][]): number[] {
   return weights;
 }
 
-function reset(onStartup=false) {
+function reset(onStartup = false): void {
   lineChart.reset();
   state.serialize();
   if (!onStartup) {
@@ -995,16 +1002,16 @@ function reset(onStartup=false) {
   lossTest = getLoss(network, testData);
   drawNetwork(network);
   updateUI(true);
-};
+}
 
-function initTutorial() {
+function initTutorial(): void {
   if (state.tutorial == null || state.tutorial === '' || state.hideText) {
     return;
   }
   d3.selectAll("article div.l--body").remove();
   let tutorial = d3.select("article").append("div")
     .attr("class", "l--body");
-  d3.html(`tutorials/${state.tutorial}.html`, (err, htmlFragment) => {
+  d3.html(`tutorials/${state.tutorial}.html`, (err: any, htmlFragment: any) => {
     if (err) {
       throw err;
     }
@@ -1021,13 +1028,15 @@ function initTutorial() {
   });
 }
 
-function drawDatasetThumbnails() {
-  function renderThumbnail(canvas, dataGenerator) {
+function drawDatasetThumbnails(): void {
+  function renderThumbnail(canvas: HTMLCanvasElement, dataGenerator: (numSamples: number, noise: number) => Example2D[]): void {
     let w = 100;
     let h = 100;
-    canvas.setAttribute("width", w);
-    canvas.setAttribute("height", h);
+    canvas.setAttribute("width", w.toString());
+    canvas.setAttribute("height", h.toString());
     let context = canvas.getContext("2d");
+    if (!context) return;
+    
     let data = dataGenerator(200, 0);
     data.forEach(function(d) {
       context.fillStyle = colorScale(d.label);
@@ -1055,7 +1064,7 @@ function drawDatasetThumbnails() {
   }
 }
 
-function hideControls() {
+function hideControls(): void {
   let hiddenProps = state.getHiddenProps();
   hiddenProps.forEach(prop => {
     let controls = d3.selectAll(`.ui-${prop}`);
@@ -1078,7 +1087,7 @@ function hideControls() {
       input.attr("checked", "true");
     }
     input.on("change", function() {
-      state.setHideProperty(id, !this.checked);
+      state.setHideProperty(id, !(this as HTMLInputElement).checked);
       state.serialize();
       userHasInteracted();
       d3.select(".hide-controls-link")
@@ -1092,7 +1101,7 @@ function hideControls() {
     .attr("href", window.location.href);
 }
 
-function generateData(firstTime = false) {
+function generateData(firstTime = false): void {
   if (!firstTime) {
     state.seed = Math.random().toFixed(5);
     state.serialize();
@@ -1107,10 +1116,15 @@ function generateData(firstTime = false) {
   
   // Apply blind spot masking if enabled
   if (blindSpotEnabled) {
-    data = applyGradientBlindSpotMask({
+    // Generate masked version of data
+    const maskedData = applyGradientBlindSpotMask({
       blindSpot: blindSpot,
       baseDatasetGenerator: generator
-    }, numSamples, state.noise / 100);
+    } as BlindSpotDatasetConfig, numSamples, state.noise / 100);
+    
+    // Blend original and masked data for better training
+    // 60% original (network learns patterns) + 40% masked (network learns to predict)
+    data = blendDatasets(data, maskedData, BLIND_SPOT_MASK_RATIO);
   }
   
   shuffle(data);
@@ -1124,7 +1138,7 @@ function generateData(firstTime = false) {
 let firstInteraction = true;
 let parametersChanged = false;
 
-function userHasInteracted() {
+function userHasInteracted(): void {
   if (!firstInteraction) {
     return;
   }
@@ -1137,7 +1151,7 @@ function userHasInteracted() {
   ga('send', 'pageview', {'sessionControl': 'start'});
 }
 
-function simulationStarted() {
+function simulationStarted(): void {
   ga('send', {
     hitType: 'event',
     eventCategory: 'Starting Simulation',
@@ -1153,4 +1167,3 @@ makeGUI();
 generateData(true);
 reset(true);
 hideControls();
-
